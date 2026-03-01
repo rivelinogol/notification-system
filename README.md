@@ -1,52 +1,69 @@
 # notification-system
 
-Skeleton de Notification System con arquitectura hexagonal y stubs para entender diseño sin integrar infraestructura real.
+Skeleton de Notification System con arquitectura hexagonal y stubs in-memory para estudiar diseño sin levantar Kafka/Redis/Postgres.
+
+## Que modela este proyecto
+
+- Entrada HTTP con idempotencia.
+- Encolado async de notificaciones.
+- Worker que procesa cola.
+- Enrutamiento por canal (`EMAIL`, `SMS`, `PUSH`).
+- Templates por tipo (`BOOKING_CONFIRMED`, `BOOKING_CANCELLED`, `PAYMENT_FAILED`, `EVENT_REMINDER`).
+- Reintentos con maximo de intentos.
+- Dead-letter store in-memory para mensajes agotados.
 
 ## Flujo
 
 1. `POST /api/v1/notifications` recibe request.
-2. `NotificationApplicationService` valida idempotencia.
-3. Guarda notificacion en repositorio in-memory.
-4. Encola ID en cola in-memory.
-5. Worker (scheduler o endpoint manual) consume 1 mensaje.
-6. Provider stub "envia" (solo log).
-7. Estado pasa por `PENDING -> PROCESSING -> SENT` (o `FAILED`).
+2. Se valida idempotency key.
+3. Se renderiza template (si no hay `customSubject/customBody`).
+4. Se guarda `PENDING` en repo in-memory.
+5. Se encola en queue in-memory.
+6. Worker procesa, marca `PROCESSING` y envia por provider stub.
+7. Si falla:
+   - `RETRY_PENDING` y re-queue si quedan intentos.
+   - `DEAD_LETTER` si agota intentos.
 
-## Componentes stub
+## Endpoints
 
-- Cache: `InMemoryIdempotencyCacheAdapter` (simula Redis)
-- Queue: `InMemoryNotificationQueueAdapter` (simula Kafka/Rabbit)
-- Repository: `InMemoryNotificationRepositoryAdapter` (simula DB)
-- Provider: `StubNotificationDeliveryAdapter` (simula SES/Twilio/Firebase)
+- `POST /api/v1/notifications`
+- `GET /api/v1/notifications/{id}`
+- `GET /api/v1/notifications/dead-letters`
+- `POST /api/v1/workers/process-next`
+- `POST /api/v1/workers/process-batch?maxItems=10`
 
-## Ejecutar
+## Ejemplo de request
 
-```bash
-mvn spring-boot:run
+```json
+{
+  "idempotencyKey": "booking-1001-email",
+  "recipient": "alice@example.com",
+  "channel": "EMAIL",
+  "type": "BOOKING_CONFIRMED",
+  "customSubject": null,
+  "customBody": null
+}
 ```
 
-## Probar
+## Simular fallos de proveedor
 
-```bash
-curl -X POST http://localhost:8080/api/v1/notifications \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "idempotencyKey": "booking-1001-email",
-    "recipient": "alice@example.com",
-    "subject": "Booking confirmed",
-    "body": "Your booking #1001 is confirmed",
-    "channel": "EMAIL"
-  }'
+Para ver retries y dead-letter:
+
+- email: recipient que contenga `fail-email`
+- sms: recipient que contenga `fail-sms`
+- push: recipient que contenga `fail-push`
+
+Ejemplo:
+
+```json
+{
+  "idempotencyKey": "booking-999-fail",
+  "recipient": "user-fail-email@example.com",
+  "channel": "EMAIL",
+  "type": "PAYMENT_FAILED"
+}
 ```
 
-El worker corre cada 1s. Tambien podes forzarlo:
+## Nota
 
-```bash
-curl -X POST http://localhost:8080/api/v1/workers/process-next
-```
-
-## Por que este skeleton
-
-- Muestra separacion `domain/application/infrastructure`.
-- Permite reemplazar stubs por adapters reales sin tocar el dominio.
-- Expone patrones clave: idempotencia, async queue, worker, estado de entrega.
+No necesitas infraestructura externa para entender el diseño. Todo corre in-memory en este skeleton.

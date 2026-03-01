@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -25,8 +26,17 @@ public class WorkerController {
         return ResponseEntity.ok(Map.of("message", "Processed one queued notification (if any)"));
     }
 
+    @PostMapping("/process-batch")
+    public ResponseEntity<Map<String, Object>> processBatch(@RequestParam(defaultValue = "10") int maxItems) {
+        processNotificationQueueUseCase.processBatch(maxItems);
+        return ResponseEntity.ok(Map.of(
+                "message", "Processed queued notifications",
+                "maxItems", maxItems
+        ));
+    }
+
     @Scheduled(fixedDelay = 1000)
     void scheduledProcess() {
-        processNotificationQueueUseCase.processNext();
+        processNotificationQueueUseCase.processBatch(5);
     }
 }

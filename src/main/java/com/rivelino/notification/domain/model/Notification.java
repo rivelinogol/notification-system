@@ -7,32 +7,43 @@ public class Notification {
 
     private final UUID id;
     private final String idempotencyKey;
+    private final NotificationType type;
     private final String recipient;
     private final String subject;
     private final String body;
     private final NotificationChannel channel;
     private final Instant createdAt;
+    private final int maxAttempts;
+
     private NotificationStatus status;
+    private int attemptCount;
     private String errorMessage;
+    private Instant sentAt;
 
     public Notification(
             UUID id,
             String idempotencyKey,
+            NotificationType type,
             String recipient,
             String subject,
             String body,
             NotificationChannel channel,
             Instant createdAt,
-            NotificationStatus status
+            int maxAttempts,
+            NotificationStatus status,
+            int attemptCount
     ) {
         this.id = id;
         this.idempotencyKey = idempotencyKey;
+        this.type = type;
         this.recipient = recipient;
         this.subject = subject;
         this.body = body;
         this.channel = channel;
         this.createdAt = createdAt;
+        this.maxAttempts = maxAttempts;
         this.status = status;
+        this.attemptCount = attemptCount;
     }
 
     public UUID getId() {
@@ -41,6 +52,10 @@ public class Notification {
 
     public String getIdempotencyKey() {
         return idempotencyKey;
+    }
+
+    public NotificationType getType() {
+        return type;
     }
 
     public String getRecipient() {
@@ -63,26 +78,53 @@ public class Notification {
         return createdAt;
     }
 
+    public int getMaxAttempts() {
+        return maxAttempts;
+    }
+
     public NotificationStatus getStatus() {
         return status;
+    }
+
+    public int getAttemptCount() {
+        return attemptCount;
     }
 
     public String getErrorMessage() {
         return errorMessage;
     }
 
+    public Instant getSentAt() {
+        return sentAt;
+    }
+
     public void markProcessing() {
         this.status = NotificationStatus.PROCESSING;
         this.errorMessage = null;
+        this.attemptCount += 1;
     }
 
     public void markSent() {
         this.status = NotificationStatus.SENT;
         this.errorMessage = null;
+        this.sentAt = Instant.now();
+    }
+
+    public void markRetryPending(String errorMessage) {
+        this.status = NotificationStatus.RETRY_PENDING;
+        this.errorMessage = errorMessage;
     }
 
     public void markFailed(String errorMessage) {
         this.status = NotificationStatus.FAILED;
         this.errorMessage = errorMessage;
+    }
+
+    public void markDeadLetter() {
+        this.status = NotificationStatus.DEAD_LETTER;
+    }
+
+    public boolean canRetry() {
+        return attemptCount < maxAttempts;
     }
 }

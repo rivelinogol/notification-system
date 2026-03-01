@@ -4,42 +4,58 @@ import com.rivelino.notification.application.dto.SubmitNotificationCommand;
 import com.rivelino.notification.application.dto.SubmitNotificationResult;
 import com.rivelino.notification.domain.model.Notification;
 import com.rivelino.notification.domain.model.NotificationStatus;
+import com.rivelino.notification.domain.port.in.GetDeadLettersUseCase;
+import com.rivelino.notification.domain.port.in.GetNotificationByIdUseCase;
 import com.rivelino.notification.domain.port.in.ProcessNotificationQueueUseCase;
 import com.rivelino.notification.domain.port.in.SubmitNotificationUseCase;
+import com.rivelino.notification.domain.port.out.DeadLetterStorePort;
 import com.rivelino.notification.domain.port.out.IdempotencyCachePort;
+import com.rivelino.notification.domain.port.out.MessageTemplatePort;
 import com.rivelino.notification.domain.port.out.NotificationDeliveryPort;
 import com.rivelino.notification.domain.port.out.NotificationQueuePort;
 import com.rivelino.notification.domain.port.out.NotificationRepositoryPort;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
-public class NotificationApplicationService implements SubmitNotificationUseCase, ProcessNotificationQueueUseCase {
+public class NotificationApplicationService implements
+        SubmitNotificationUseCase,
+        ProcessNotificationQueueUseCase,
+        GetNotificationByIdUseCase,
+        GetDeadLettersUseCase {
+
+    private static final int DEFAULT_MAX_ATTEMPTS = 3;
 
     private final NotificationRepositoryPort notificationRepository;
     private final NotificationQueuePort queue;
     private final IdempotencyCachePort idempotencyCache;
     private final NotificationDeliveryPort delivery;
+    private final MessageTemplatePort templatePort;
+    private final DeadLetterStorePort deadLetterStore;
 
     public NotificationApplicationService(
             NotificationRepositoryPort notificationRepository,
             NotificationQueuePort queue,
             IdempotencyCachePort idempotencyCache,
-            NotificationDeliveryPort delivery
+            NotificationDeliveryPort delivery,
+            MessageTemplatePort templatePort,
+            DeadLetterStorePort deadLetterStore
     ) {
         this.notificationRepository = notificationRepository;
         this.queue = queue;
         this.idempotencyCache = idempotencyCache;
         this.delivery = delivery;
+        this.templatePort = templatePort;
+        this.deadLetterStore = deadLetterStore;
     }
 
     @Override
     public SubmitNotificationResult submit(SubmitNotificationCommand command) {
-        if (command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {
-            throw new IllegalArgumentException("idempotencyKey is required");
-        }
+        validate(command);
 
         var existingFromCache = idempotencyCache.get(command.idempotencyKey());
         if (existingFromCache.isPresent()) {
@@ -52,15 +68,22 @@ public class NotificationApplicationService implements SubmitNotificationUseCase
             return new SubmitNotificationResult(existingFromRepository.get().getId(), true);
         }
 
+        var template = templatePort.render(command.type(), command.recipient());
+        var subject = isBlank(command.customSubject()) ? template.subject() : command.customSubject();
+        var body = isBlank(command.customBody()) ? template.body() : command.customBody();
+
         var notification = new Notification(
                 UUID.randomUUID(),
                 command.idempotencyKey(),
+                command.type(),
                 command.recipient(),
-                command.subject(),
-                command.body(),
+                subject,
+                body,
                 command.channel(),
                 Instant.now(),
-                NotificationStatus.PENDING
+                DEFAULT_MAX_ATTEMPTS,
+                NotificationStatus.PENDING,
+                0
         );
 
         var saved = notificationRepository.save(notification);
@@ -76,8 +99,35 @@ public class NotificationApplicationService implements SubmitNotificationUseCase
         if (next.isEmpty()) {
             return;
         }
+        processOne(next.get());
+    }
 
-        var notificationId = next.get();
+    @Override
+    public void processBatch(int maxItems) {
+        if (maxItems < 1) {
+            throw new IllegalArgumentException("maxItems must be >= 1");
+        }
+
+        for (int i = 0; i < maxItems; i++) {
+            var next = queue.dequeue();
+            if (next.isEmpty()) {
+                return;
+            }
+            processOne(next.get());
+        }
+    }
+
+    @Override
+    public Optional<Notification> getById(UUID notificationId) {
+        return notificationRepository.findById(notificationId);
+    }
+
+    @Override
+    public List<Notification> getDeadLetters() {
+        return deadLetterStore.findAll();
+    }
+
+    private void processOne(UUID notificationId) {
         var notification = notificationRepository.findById(notificationId)
                 .orElseThrow(() -> new IllegalStateException("Notification not found: " + notificationId));
 
@@ -90,8 +140,35 @@ public class NotificationApplicationService implements SubmitNotificationUseCase
             notification.markSent();
             notificationRepository.save(notification);
         } catch (Exception ex) {
-            notification.markFailed(ex.getMessage());
-            notificationRepository.save(notification);
+            if (notification.canRetry()) {
+                notification.markRetryPending(ex.getMessage());
+                notificationRepository.save(notification);
+                queue.enqueue(notification.getId());
+            } else {
+                notification.markFailed(ex.getMessage());
+                notification.markDeadLetter();
+                notificationRepository.save(notification);
+                deadLetterStore.store(notification);
+            }
         }
+    }
+
+    private static void validate(SubmitNotificationCommand command) {
+        if (isBlank(command.idempotencyKey())) {
+            throw new IllegalArgumentException("idempotencyKey is required");
+        }
+        if (isBlank(command.recipient())) {
+            throw new IllegalArgumentException("recipient is required");
+        }
+        if (command.channel() == null) {
+            throw new IllegalArgumentException("channel is required");
+        }
+        if (command.type() == null) {
+            throw new IllegalArgumentException("type is required");
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }
