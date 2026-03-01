@@ -1,5 +1,6 @@
 package com.rivelino.notification.infrastructure.out.provider;
 
+import com.rivelino.notification.domain.exception.NotificationDeliveryException;
 import com.rivelino.notification.domain.model.Notification;
 import com.rivelino.notification.domain.model.NotificationChannel;
 import com.rivelino.notification.domain.port.out.ChannelSenderPort;
@@ -19,9 +20,22 @@ public class SmsChannelSenderAdapter implements ChannelSenderPort {
 
     @Override
     public void send(Notification notification) {
-        if (notification.getRecipient().contains("fail-sms")) {
-            throw new IllegalStateException("Simulated sms provider failure");
+        if (notification.getRecipient().contains("invalid-sms")) {
+            throw new NotificationDeliveryException(
+                    "Simulated sms validation error",
+                    false,
+                    "SMS_INVALID_RECIPIENT"
+            );
         }
+
+        if (notification.getRecipient().contains("fail-sms")) {
+            throw new NotificationDeliveryException(
+                    "Simulated sms provider outage",
+                    true,
+                    "SMS_PROVIDER_UNAVAILABLE"
+            );
+        }
+
         log.info("STUB_SMS to={} message={}",
                 notification.getRecipient(),
                 notification.getBody());

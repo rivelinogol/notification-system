@@ -1,5 +1,6 @@
 package com.rivelino.notification.infrastructure.out.provider;
 
+import com.rivelino.notification.domain.exception.NotificationDeliveryException;
 import com.rivelino.notification.domain.model.Notification;
 import com.rivelino.notification.domain.model.NotificationChannel;
 import com.rivelino.notification.domain.port.out.ChannelSenderPort;
@@ -19,9 +20,22 @@ public class PushChannelSenderAdapter implements ChannelSenderPort {
 
     @Override
     public void send(Notification notification) {
-        if (notification.getRecipient().contains("fail-push")) {
-            throw new IllegalStateException("Simulated push provider failure");
+        if (notification.getRecipient().contains("invalid-push")) {
+            throw new NotificationDeliveryException(
+                    "Simulated push token validation error",
+                    false,
+                    "PUSH_INVALID_TOKEN"
+            );
         }
+
+        if (notification.getRecipient().contains("fail-push")) {
+            throw new NotificationDeliveryException(
+                    "Simulated push provider outage",
+                    true,
+                    "PUSH_PROVIDER_UNAVAILABLE"
+            );
+        }
+
         log.info("STUB_PUSH to={} title={} body={}",
                 notification.getRecipient(),
                 notification.getSubject(),

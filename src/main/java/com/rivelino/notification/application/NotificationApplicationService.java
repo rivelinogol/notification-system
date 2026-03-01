@@ -2,6 +2,7 @@ package com.rivelino.notification.application;
 
 import com.rivelino.notification.application.dto.SubmitNotificationCommand;
 import com.rivelino.notification.application.dto.SubmitNotificationResult;
+import com.rivelino.notification.domain.exception.NotificationDeliveryException;
 import com.rivelino.notification.domain.model.Notification;
 import com.rivelino.notification.domain.model.NotificationStatus;
 import com.rivelino.notification.domain.port.in.GetDeadLettersUseCase;
@@ -146,21 +147,28 @@ public class NotificationApplicationService implements
 
             notification.markSent();
             notificationRepository.save(notification);
+        } catch (NotificationDeliveryException ex) {
+            handleFailure(notification, ex.getMessage(), ex.isRetryable());
         } catch (Exception ex) {
-            if (notification.canRetry()) {
-                notification.markRetryPending(ex.getMessage());
-                notificationRepository.save(notification);
-
-                var delay = retryBackoffPolicy.nextDelayForAttempt(notification.getAttemptCount());
-                var nextRetryAt = clock.now().plus(delay);
-                queue.enqueue(notification.getId(), nextRetryAt);
-            } else {
-                notification.markFailed(ex.getMessage());
-                notification.markDeadLetter();
-                notificationRepository.save(notification);
-                deadLetterStore.store(notification);
-            }
+            handleFailure(notification, ex.getMessage(), true);
         }
+    }
+
+    private void handleFailure(Notification notification, String errorMessage, boolean retryable) {
+        if (retryable && notification.canRetry()) {
+            notification.markRetryPending(errorMessage);
+            notificationRepository.save(notification);
+
+            var delay = retryBackoffPolicy.nextDelayForAttempt(notification.getAttemptCount());
+            var nextRetryAt = clock.now().plus(delay);
+            queue.enqueue(notification.getId(), nextRetryAt);
+            return;
+        }
+
+        notification.markFailed(errorMessage);
+        notification.markDeadLetter();
+        notificationRepository.save(notification);
+        deadLetterStore.store(notification);
     }
 
     private static void validate(SubmitNotificationCommand command) {

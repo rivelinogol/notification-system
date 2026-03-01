@@ -22,8 +22,9 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 5. Se encola en queue in-memory con `availableAt = now`.
 6. Worker procesa, marca `PROCESSING` y envia por provider stub.
 7. Si falla:
-   - `RETRY_PENDING` y re-queue con delay exponencial (`5s`, `10s`, `20s`, tope `60s`).
-   - `DEAD_LETTER` si agota intentos.
+   - error retryable: `RETRY_PENDING` y re-queue con delay exponencial (`5s`, `10s`, `20s`, tope `60s`).
+   - error non-retryable: `DEAD_LETTER` inmediato.
+   - retryable sin intentos restantes: `DEAD_LETTER`.
 
 ## Endpoints
 
@@ -51,13 +52,19 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 
 ## Simular fallos de proveedor
 
-Para ver retries y dead-letter:
+Para ver retries (errores retryable):
 
 - email: recipient que contenga `fail-email`
 - sms: recipient que contenga `fail-sms`
 - push: recipient que contenga `fail-push`
 
-Ejemplo:
+Para ver errores no-retryable (se van directo a dead-letter):
+
+- email: recipient que contenga `invalid-email`
+- sms: recipient que contenga `invalid-sms`
+- push: recipient que contenga `invalid-push`
+
+Ejemplo retryable:
 
 ```json
 {
