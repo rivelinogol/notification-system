@@ -20,6 +20,7 @@ import com.rivelino.notification.domain.port.out.NotificationMetricsPort;
 import com.rivelino.notification.domain.port.out.NotificationQueuePort;
 import com.rivelino.notification.domain.port.out.NotificationRepositoryPort;
 import com.rivelino.notification.domain.port.out.QuietHoursPolicyPort;
+import com.rivelino.notification.domain.port.out.RateLimitPort;
 import com.rivelino.notification.domain.port.out.RecipientPreferencePort;
 import com.rivelino.notification.domain.port.out.RetryBackoffPolicyPort;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,7 @@ public class NotificationApplicationService implements
     private final RetryBackoffPolicyPort retryBackoffPolicy;
     private final RecipientPreferencePort recipientPreference;
     private final QuietHoursPolicyPort quietHoursPolicy;
+    private final RateLimitPort rateLimit;
     private final NotificationMetricsPort metrics;
     private final ClockPort clock;
 
@@ -61,6 +63,7 @@ public class NotificationApplicationService implements
             RetryBackoffPolicyPort retryBackoffPolicy,
             RecipientPreferencePort recipientPreference,
             QuietHoursPolicyPort quietHoursPolicy,
+            RateLimitPort rateLimit,
             NotificationMetricsPort metrics,
             ClockPort clock
     ) {
@@ -73,6 +76,7 @@ public class NotificationApplicationService implements
         this.retryBackoffPolicy = retryBackoffPolicy;
         this.recipientPreference = recipientPreference;
         this.quietHoursPolicy = quietHoursPolicy;
+        this.rateLimit = rateLimit;
         this.metrics = metrics;
         this.clock = clock;
     }
@@ -128,6 +132,16 @@ public class NotificationApplicationService implements
             var savedSuppressed = notificationRepository.save(notification);
             idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
             metrics.incrementSuppressed();
+            return new SubmitNotificationResult(savedSuppressed.getId(), false);
+        }
+
+        var blockedUntil = rateLimit.blockedUntil(command.recipient(), command.channel(), now);
+        if (blockedUntil.isPresent()) {
+            notification.markSuppressed("Suppressed: rate limit until " + blockedUntil.get());
+            var savedSuppressed = notificationRepository.save(notification);
+            idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
+            metrics.incrementSuppressed();
+            metrics.incrementRateLimited();
             return new SubmitNotificationResult(savedSuppressed.getId(), false);
         }
 

@@ -23,11 +23,13 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 4. Se revisan preferencias:
    - canal deshabilitado -> `SUPPRESSED`.
    - tipo deshabilitado -> `SUPPRESSED`.
-5. Si pasa preferencias:
+5. Se aplica rate limiting por `recipient+channel`:
+   - si excede: `SUPPRESSED` por rate limit.
+6. Si pasa rate limiting:
    - se encola con `availableAt = now`.
    - o se encola diferido si aplica quiet hours.
-6. Worker procesa, marca `PROCESSING` y envia por provider stub.
-7. Si falla:
+7. Worker procesa, marca `PROCESSING` y envia por provider stub.
+8. Si falla:
    - error retryable: `RETRY_PENDING` y re-queue con delay exponencial (`5s`, `10s`, `20s`, tope `60s`).
    - error non-retryable: `DEAD_LETTER` inmediato.
    - retryable sin intentos restantes: `DEAD_LETTER`.
@@ -65,6 +67,7 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 - `submittedTotal`
 - `duplicateTotal`
 - `suppressedTotal`
+- `rateLimitedTotal`
 - `sentTotal`
 - `retryScheduledTotal`
 - `failedTotal`
@@ -105,6 +108,16 @@ Ejemplo:
   "type": "BOOKING_CONFIRMED"
 }
 ```
+
+
+## Simular rate limiting
+
+Rate limit in-memory: maximo `5` notificaciones por minuto por `recipient+channel`.
+
+Si excede el limite:
+
+- la notificacion queda `SUPPRESSED`
+- se incrementa `rateLimitedTotal` en `/stats`
 
 ## Simular quiet hours
 

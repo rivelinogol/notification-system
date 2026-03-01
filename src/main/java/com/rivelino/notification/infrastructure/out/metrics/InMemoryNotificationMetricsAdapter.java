@@ -12,6 +12,7 @@ public class InMemoryNotificationMetricsAdapter implements NotificationMetricsPo
     private final LongAdder submittedTotal = new LongAdder();
     private final LongAdder duplicateTotal = new LongAdder();
     private final LongAdder suppressedTotal = new LongAdder();
+    private final LongAdder rateLimitedTotal = new LongAdder();
     private final LongAdder sentTotal = new LongAdder();
     private final LongAdder retryScheduledTotal = new LongAdder();
     private final LongAdder failedTotal = new LongAdder();
@@ -32,6 +33,11 @@ public class InMemoryNotificationMetricsAdapter implements NotificationMetricsPo
     @Override
     public void incrementSuppressed() {
         suppressedTotal.increment();
+    }
+
+    @Override
+    public void incrementRateLimited() {
+        rateLimitedTotal.increment();
     }
 
     @Override
@@ -69,6 +75,7 @@ public class InMemoryNotificationMetricsAdapter implements NotificationMetricsPo
                 submittedTotal.sum(),
                 duplicateTotal.sum(),
                 suppressedTotal.sum(),
+                rateLimitedTotal.sum(),
                 sentTotal.sum(),
                 retryScheduledTotal.sum(),
                 failedTotal.sum(),

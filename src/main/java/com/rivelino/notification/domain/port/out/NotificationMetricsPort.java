@@ -10,6 +10,8 @@ public interface NotificationMetricsPort {
 
     void incrementSuppressed();
 
+    void incrementRateLimited();
+
     void incrementSent();
 
     void incrementRetryScheduled();
