@@ -11,6 +11,8 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 - Templates por tipo (`BOOKING_CONFIRMED`, `BOOKING_CANCELLED`, `PAYMENT_FAILED`, `EVENT_REMINDER`).
 - Reintentos con backoff exponencial.
 - Reloj simulado in-memory para controlar el tiempo.
+- Preferencias de usuario in-memory (opt-out por canal/tipo).
+- Quiet hours in-memory con defer de entrega.
 - Dead-letter store in-memory para mensajes agotados.
 
 ## Flujo
@@ -18,8 +20,12 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 1. `POST /api/v1/notifications` recibe request.
 2. Se valida idempotency key.
 3. Se renderiza template (si no hay `customSubject/customBody`).
-4. Se guarda `PENDING` en repo in-memory.
-5. Se encola en queue in-memory con `availableAt = now`.
+4. Se revisan preferencias:
+   - canal deshabilitado -> `SUPPRESSED`.
+   - tipo deshabilitado -> `SUPPRESSED`.
+5. Si pasa preferencias:
+   - se encola con `availableAt = now`.
+   - o se encola diferido si aplica quiet hours.
 6. Worker procesa, marca `PROCESSING` y envia por provider stub.
 7. Si falla:
    - error retryable: `RETRY_PENDING` y re-queue con delay exponencial (`5s`, `10s`, `20s`, tope `60s`).
@@ -64,16 +70,30 @@ Para ver errores no-retryable (se van directo a dead-letter):
 - sms: recipient que contenga `invalid-sms`
 - push: recipient que contenga `invalid-push`
 
-Ejemplo retryable:
+## Simular preferencias (opt-out)
+
+- `optout-all` -> suprime cualquier notificacion.
+- `optout-email` / `optout-sms` / `optout-push` -> suprime por canal.
+- `optout-booking-confirmed`
+- `optout-booking-cancelled`
+- `optout-payment-failed`
+- `optout-event-reminder`
+
+Ejemplo:
 
 ```json
 {
-  "idempotencyKey": "booking-999-fail",
-  "recipient": "user-fail-email@example.com",
+  "idempotencyKey": "booking-2001-optout",
+  "recipient": "user-optout-email@example.com",
   "channel": "EMAIL",
-  "type": "PAYMENT_FAILED"
+  "type": "BOOKING_CONFIRMED"
 }
 ```
+
+## Simular quiet hours
+
+Si el recipient contiene `quiet-night`, aplica ventana silenciosa UTC `22:00-08:00`.
+Durante esa ventana no se envia de inmediato: se agenda para las `08:00 UTC`.
 
 ## Simular avance de tiempo
 

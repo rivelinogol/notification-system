@@ -104,10 +104,10 @@ public class Notification {
         this.attemptCount += 1;
     }
 
-    public void markSent() {
+    public void markSent(Instant sentAt) {
         this.status = NotificationStatus.SENT;
         this.errorMessage = null;
-        this.sentAt = Instant.now();
+        this.sentAt = sentAt;
     }
 
     public void markRetryPending(String errorMessage) {
@@ -122,6 +122,11 @@ public class Notification {
 
     public void markDeadLetter() {
         this.status = NotificationStatus.DEAD_LETTER;
+    }
+
+    public void markSuppressed(String reason) {
+        this.status = NotificationStatus.SUPPRESSED;
+        this.errorMessage = reason;
     }
 
     public boolean canRetry() {

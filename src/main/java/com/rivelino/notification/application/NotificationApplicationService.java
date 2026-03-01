@@ -16,9 +16,12 @@ import com.rivelino.notification.domain.port.out.MessageTemplatePort;
 import com.rivelino.notification.domain.port.out.NotificationDeliveryPort;
 import com.rivelino.notification.domain.port.out.NotificationQueuePort;
 import com.rivelino.notification.domain.port.out.NotificationRepositoryPort;
+import com.rivelino.notification.domain.port.out.QuietHoursPolicyPort;
+import com.rivelino.notification.domain.port.out.RecipientPreferencePort;
 import com.rivelino.notification.domain.port.out.RetryBackoffPolicyPort;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +42,8 @@ public class NotificationApplicationService implements
     private final MessageTemplatePort templatePort;
     private final DeadLetterStorePort deadLetterStore;
     private final RetryBackoffPolicyPort retryBackoffPolicy;
+    private final RecipientPreferencePort recipientPreference;
+    private final QuietHoursPolicyPort quietHoursPolicy;
     private final ClockPort clock;
 
     public NotificationApplicationService(
@@ -49,6 +54,8 @@ public class NotificationApplicationService implements
             MessageTemplatePort templatePort,
             DeadLetterStorePort deadLetterStore,
             RetryBackoffPolicyPort retryBackoffPolicy,
+            RecipientPreferencePort recipientPreference,
+            QuietHoursPolicyPort quietHoursPolicy,
             ClockPort clock
     ) {
         this.notificationRepository = notificationRepository;
@@ -58,6 +65,8 @@ public class NotificationApplicationService implements
         this.templatePort = templatePort;
         this.deadLetterStore = deadLetterStore;
         this.retryBackoffPolicy = retryBackoffPolicy;
+        this.recipientPreference = recipientPreference;
+        this.quietHoursPolicy = quietHoursPolicy;
         this.clock = clock;
     }
 
@@ -79,6 +88,7 @@ public class NotificationApplicationService implements
         var template = templatePort.render(command.type(), command.recipient());
         var subject = isBlank(command.customSubject()) ? template.subject() : command.customSubject();
         var body = isBlank(command.customBody()) ? template.body() : command.customBody();
+        var now = clock.now();
 
         var notification = new Notification(
                 UUID.randomUUID(),
@@ -88,15 +98,31 @@ public class NotificationApplicationService implements
                 subject,
                 body,
                 command.channel(),
-                clock.now(),
+                now,
                 DEFAULT_MAX_ATTEMPTS,
                 NotificationStatus.PENDING,
                 0
         );
 
+        if (!recipientPreference.isChannelEnabled(command.recipient(), command.channel())) {
+            notification.markSuppressed("Suppressed: channel opt-out");
+            var savedSuppressed = notificationRepository.save(notification);
+            idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
+            return new SubmitNotificationResult(savedSuppressed.getId(), false);
+        }
+
+        if (!recipientPreference.isTypeEnabled(command.recipient(), command.type())) {
+            notification.markSuppressed("Suppressed: type opt-out");
+            var savedSuppressed = notificationRepository.save(notification);
+            idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
+            return new SubmitNotificationResult(savedSuppressed.getId(), false);
+        }
+
+        Instant availableAt = quietHoursPolicy.deferUntil(command.recipient(), now).orElse(now);
+
         var saved = notificationRepository.save(notification);
         idempotencyCache.put(saved.getIdempotencyKey(), saved.getId());
-        queue.enqueue(saved.getId(), clock.now());
+        queue.enqueue(saved.getId(), availableAt);
 
         return new SubmitNotificationResult(saved.getId(), false);
     }
@@ -145,7 +171,7 @@ public class NotificationApplicationService implements
 
             delivery.send(notification);
 
-            notification.markSent();
+            notification.markSent(clock.now());
             notificationRepository.save(notification);
         } catch (NotificationDeliveryException ex) {
             handleFailure(notification, ex.getMessage(), ex.isRetryable());
