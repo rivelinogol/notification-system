@@ -9,7 +9,8 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 - Worker que procesa cola.
 - Enrutamiento por canal (`EMAIL`, `SMS`, `PUSH`).
 - Templates por tipo (`BOOKING_CONFIRMED`, `BOOKING_CANCELLED`, `PAYMENT_FAILED`, `EVENT_REMINDER`).
-- Reintentos con maximo de intentos.
+- Reintentos con backoff exponencial.
+- Reloj simulado in-memory para controlar el tiempo.
 - Dead-letter store in-memory para mensajes agotados.
 
 ## Flujo
@@ -18,10 +19,10 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 2. Se valida idempotency key.
 3. Se renderiza template (si no hay `customSubject/customBody`).
 4. Se guarda `PENDING` en repo in-memory.
-5. Se encola en queue in-memory.
+5. Se encola en queue in-memory con `availableAt = now`.
 6. Worker procesa, marca `PROCESSING` y envia por provider stub.
 7. Si falla:
-   - `RETRY_PENDING` y re-queue si quedan intentos.
+   - `RETRY_PENDING` y re-queue con delay exponencial (`5s`, `10s`, `20s`, tope `60s`).
    - `DEAD_LETTER` si agota intentos.
 
 ## Endpoints
@@ -31,6 +32,9 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 - `GET /api/v1/notifications/dead-letters`
 - `POST /api/v1/workers/process-next`
 - `POST /api/v1/workers/process-batch?maxItems=10`
+- `GET /api/v1/simulation/clock`
+- `POST /api/v1/simulation/clock/advance`
+- `POST /api/v1/simulation/clock/reset`
 
 ## Ejemplo de request
 
@@ -62,6 +66,28 @@ Ejemplo:
   "channel": "EMAIL",
   "type": "PAYMENT_FAILED"
 }
+```
+
+## Simular avance de tiempo
+
+Consultar reloj:
+
+```bash
+curl http://localhost:8080/api/v1/simulation/clock
+```
+
+Avanzar 30 segundos (destraba retries programados):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/simulation/clock/advance \
+  -H 'Content-Type: application/json' \
+  -d '{"seconds": 30}'
+```
+
+Resetear reloj a tiempo real:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/simulation/clock/reset
 ```
 
 ## Nota

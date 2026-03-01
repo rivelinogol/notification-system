@@ -8,15 +8,16 @@ import com.rivelino.notification.domain.port.in.GetDeadLettersUseCase;
 import com.rivelino.notification.domain.port.in.GetNotificationByIdUseCase;
 import com.rivelino.notification.domain.port.in.ProcessNotificationQueueUseCase;
 import com.rivelino.notification.domain.port.in.SubmitNotificationUseCase;
+import com.rivelino.notification.domain.port.out.ClockPort;
 import com.rivelino.notification.domain.port.out.DeadLetterStorePort;
 import com.rivelino.notification.domain.port.out.IdempotencyCachePort;
 import com.rivelino.notification.domain.port.out.MessageTemplatePort;
 import com.rivelino.notification.domain.port.out.NotificationDeliveryPort;
 import com.rivelino.notification.domain.port.out.NotificationQueuePort;
 import com.rivelino.notification.domain.port.out.NotificationRepositoryPort;
+import com.rivelino.notification.domain.port.out.RetryBackoffPolicyPort;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,6 +37,8 @@ public class NotificationApplicationService implements
     private final NotificationDeliveryPort delivery;
     private final MessageTemplatePort templatePort;
     private final DeadLetterStorePort deadLetterStore;
+    private final RetryBackoffPolicyPort retryBackoffPolicy;
+    private final ClockPort clock;
 
     public NotificationApplicationService(
             NotificationRepositoryPort notificationRepository,
@@ -43,7 +46,9 @@ public class NotificationApplicationService implements
             IdempotencyCachePort idempotencyCache,
             NotificationDeliveryPort delivery,
             MessageTemplatePort templatePort,
-            DeadLetterStorePort deadLetterStore
+            DeadLetterStorePort deadLetterStore,
+            RetryBackoffPolicyPort retryBackoffPolicy,
+            ClockPort clock
     ) {
         this.notificationRepository = notificationRepository;
         this.queue = queue;
@@ -51,6 +56,8 @@ public class NotificationApplicationService implements
         this.delivery = delivery;
         this.templatePort = templatePort;
         this.deadLetterStore = deadLetterStore;
+        this.retryBackoffPolicy = retryBackoffPolicy;
+        this.clock = clock;
     }
 
     @Override
@@ -80,7 +87,7 @@ public class NotificationApplicationService implements
                 subject,
                 body,
                 command.channel(),
-                Instant.now(),
+                clock.now(),
                 DEFAULT_MAX_ATTEMPTS,
                 NotificationStatus.PENDING,
                 0
@@ -88,14 +95,14 @@ public class NotificationApplicationService implements
 
         var saved = notificationRepository.save(notification);
         idempotencyCache.put(saved.getIdempotencyKey(), saved.getId());
-        queue.enqueue(saved.getId());
+        queue.enqueue(saved.getId(), clock.now());
 
         return new SubmitNotificationResult(saved.getId(), false);
     }
 
     @Override
     public void processNext() {
-        var next = queue.dequeue();
+        var next = queue.dequeueReady(clock.now());
         if (next.isEmpty()) {
             return;
         }
@@ -109,7 +116,7 @@ public class NotificationApplicationService implements
         }
 
         for (int i = 0; i < maxItems; i++) {
-            var next = queue.dequeue();
+            var next = queue.dequeueReady(clock.now());
             if (next.isEmpty()) {
                 return;
             }
@@ -143,7 +150,10 @@ public class NotificationApplicationService implements
             if (notification.canRetry()) {
                 notification.markRetryPending(ex.getMessage());
                 notificationRepository.save(notification);
-                queue.enqueue(notification.getId());
+
+                var delay = retryBackoffPolicy.nextDelayForAttempt(notification.getAttemptCount());
+                var nextRetryAt = clock.now().plus(delay);
+                queue.enqueue(notification.getId(), nextRetryAt);
             } else {
                 notification.markFailed(ex.getMessage());
                 notification.markDeadLetter();
