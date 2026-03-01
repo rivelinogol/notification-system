@@ -4,9 +4,11 @@ import com.rivelino.notification.application.dto.SubmitNotificationCommand;
 import com.rivelino.notification.application.dto.SubmitNotificationResult;
 import com.rivelino.notification.domain.exception.NotificationDeliveryException;
 import com.rivelino.notification.domain.model.Notification;
+import com.rivelino.notification.domain.model.NotificationStatsSnapshot;
 import com.rivelino.notification.domain.model.NotificationStatus;
 import com.rivelino.notification.domain.port.in.GetDeadLettersUseCase;
 import com.rivelino.notification.domain.port.in.GetNotificationByIdUseCase;
+import com.rivelino.notification.domain.port.in.GetNotificationStatsUseCase;
 import com.rivelino.notification.domain.port.in.ProcessNotificationQueueUseCase;
 import com.rivelino.notification.domain.port.in.SubmitNotificationUseCase;
 import com.rivelino.notification.domain.port.out.ClockPort;
@@ -14,6 +16,7 @@ import com.rivelino.notification.domain.port.out.DeadLetterStorePort;
 import com.rivelino.notification.domain.port.out.IdempotencyCachePort;
 import com.rivelino.notification.domain.port.out.MessageTemplatePort;
 import com.rivelino.notification.domain.port.out.NotificationDeliveryPort;
+import com.rivelino.notification.domain.port.out.NotificationMetricsPort;
 import com.rivelino.notification.domain.port.out.NotificationQueuePort;
 import com.rivelino.notification.domain.port.out.NotificationRepositoryPort;
 import com.rivelino.notification.domain.port.out.QuietHoursPolicyPort;
@@ -31,7 +34,8 @@ public class NotificationApplicationService implements
         SubmitNotificationUseCase,
         ProcessNotificationQueueUseCase,
         GetNotificationByIdUseCase,
-        GetDeadLettersUseCase {
+        GetDeadLettersUseCase,
+        GetNotificationStatsUseCase {
 
     private static final int DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -44,6 +48,7 @@ public class NotificationApplicationService implements
     private final RetryBackoffPolicyPort retryBackoffPolicy;
     private final RecipientPreferencePort recipientPreference;
     private final QuietHoursPolicyPort quietHoursPolicy;
+    private final NotificationMetricsPort metrics;
     private final ClockPort clock;
 
     public NotificationApplicationService(
@@ -56,6 +61,7 @@ public class NotificationApplicationService implements
             RetryBackoffPolicyPort retryBackoffPolicy,
             RecipientPreferencePort recipientPreference,
             QuietHoursPolicyPort quietHoursPolicy,
+            NotificationMetricsPort metrics,
             ClockPort clock
     ) {
         this.notificationRepository = notificationRepository;
@@ -67,6 +73,7 @@ public class NotificationApplicationService implements
         this.retryBackoffPolicy = retryBackoffPolicy;
         this.recipientPreference = recipientPreference;
         this.quietHoursPolicy = quietHoursPolicy;
+        this.metrics = metrics;
         this.clock = clock;
     }
 
@@ -76,14 +83,18 @@ public class NotificationApplicationService implements
 
         var existingFromCache = idempotencyCache.get(command.idempotencyKey());
         if (existingFromCache.isPresent()) {
+            metrics.incrementDuplicate();
             return new SubmitNotificationResult(existingFromCache.get(), true);
         }
 
         var existingFromRepository = notificationRepository.findByIdempotencyKey(command.idempotencyKey());
         if (existingFromRepository.isPresent()) {
             idempotencyCache.put(command.idempotencyKey(), existingFromRepository.get().getId());
+            metrics.incrementDuplicate();
             return new SubmitNotificationResult(existingFromRepository.get().getId(), true);
         }
+
+        metrics.incrementSubmitted();
 
         var template = templatePort.render(command.type(), command.recipient());
         var subject = isBlank(command.customSubject()) ? template.subject() : command.customSubject();
@@ -108,6 +119,7 @@ public class NotificationApplicationService implements
             notification.markSuppressed("Suppressed: channel opt-out");
             var savedSuppressed = notificationRepository.save(notification);
             idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
+            metrics.incrementSuppressed();
             return new SubmitNotificationResult(savedSuppressed.getId(), false);
         }
 
@@ -115,6 +127,7 @@ public class NotificationApplicationService implements
             notification.markSuppressed("Suppressed: type opt-out");
             var savedSuppressed = notificationRepository.save(notification);
             idempotencyCache.put(savedSuppressed.getIdempotencyKey(), savedSuppressed.getId());
+            metrics.incrementSuppressed();
             return new SubmitNotificationResult(savedSuppressed.getId(), false);
         }
 
@@ -161,6 +174,11 @@ public class NotificationApplicationService implements
         return deadLetterStore.findAll();
     }
 
+    @Override
+    public NotificationStatsSnapshot getStats() {
+        return metrics.snapshot();
+    }
+
     private void processOne(UUID notificationId) {
         var notification = notificationRepository.findById(notificationId)
                 .orElseThrow(() -> new IllegalStateException("Notification not found: " + notificationId));
@@ -171,8 +189,12 @@ public class NotificationApplicationService implements
 
             delivery.send(notification);
 
-            notification.markSent(clock.now());
+            var now = clock.now();
+            notification.markSent(now);
             notificationRepository.save(notification);
+
+            metrics.incrementSent();
+            metrics.recordSentLatencyMs(now.toEpochMilli() - notification.getCreatedAt().toEpochMilli());
         } catch (NotificationDeliveryException ex) {
             handleFailure(notification, ex.getMessage(), ex.isRetryable());
         } catch (Exception ex) {
@@ -188,6 +210,7 @@ public class NotificationApplicationService implements
             var delay = retryBackoffPolicy.nextDelayForAttempt(notification.getAttemptCount());
             var nextRetryAt = clock.now().plus(delay);
             queue.enqueue(notification.getId(), nextRetryAt);
+            metrics.incrementRetryScheduled();
             return;
         }
 
@@ -195,6 +218,8 @@ public class NotificationApplicationService implements
         notification.markDeadLetter();
         notificationRepository.save(notification);
         deadLetterStore.store(notification);
+        metrics.incrementFailed();
+        metrics.incrementDeadLetter();
     }
 
     private static void validate(SubmitNotificationCommand command) {

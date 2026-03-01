@@ -1,8 +1,10 @@
 package com.rivelino.notification.infrastructure.in.rest;
 
 import com.rivelino.notification.application.dto.SubmitNotificationCommand;
+import com.rivelino.notification.domain.model.NotificationStatsSnapshot;
 import com.rivelino.notification.domain.port.in.GetDeadLettersUseCase;
 import com.rivelino.notification.domain.port.in.GetNotificationByIdUseCase;
+import com.rivelino.notification.domain.port.in.GetNotificationStatsUseCase;
 import com.rivelino.notification.domain.port.in.SubmitNotificationUseCase;
 import com.rivelino.notification.infrastructure.in.rest.dto.NotificationResponse;
 import com.rivelino.notification.infrastructure.in.rest.dto.SubmitNotificationRequest;
@@ -26,15 +28,18 @@ public class NotificationController {
     private final SubmitNotificationUseCase submitNotificationUseCase;
     private final GetNotificationByIdUseCase getNotificationByIdUseCase;
     private final GetDeadLettersUseCase getDeadLettersUseCase;
+    private final GetNotificationStatsUseCase getNotificationStatsUseCase;
 
     public NotificationController(
             SubmitNotificationUseCase submitNotificationUseCase,
             GetNotificationByIdUseCase getNotificationByIdUseCase,
-            GetDeadLettersUseCase getDeadLettersUseCase
+            GetDeadLettersUseCase getDeadLettersUseCase,
+            GetNotificationStatsUseCase getNotificationStatsUseCase
     ) {
         this.submitNotificationUseCase = submitNotificationUseCase;
         this.getNotificationByIdUseCase = getNotificationByIdUseCase;
         this.getDeadLettersUseCase = getDeadLettersUseCase;
+        this.getNotificationStatsUseCase = getNotificationStatsUseCase;
     }
 
     @PostMapping
@@ -68,5 +73,10 @@ public class NotificationController {
         return getDeadLettersUseCase.getDeadLetters().stream()
                 .map(NotificationResponse::from)
                 .toList();
+    }
+
+    @GetMapping("/stats")
+    public NotificationStatsSnapshot stats() {
+        return getNotificationStatsUseCase.getStats();
     }
 }

@@ -37,6 +37,7 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
 - `POST /api/v1/notifications`
 - `GET /api/v1/notifications/{id}`
 - `GET /api/v1/notifications/dead-letters`
+- `GET /api/v1/notifications/stats`
 - `POST /api/v1/workers/process-next`
 - `POST /api/v1/workers/process-batch?maxItems=10`
 - `GET /api/v1/simulation/clock`
@@ -55,6 +56,21 @@ Skeleton de Notification System con arquitectura hexagonal y stubs in-memory par
   "customBody": null
 }
 ```
+
+
+## Metricas in-memory
+
+`GET /api/v1/notifications/stats` devuelve:
+
+- `submittedTotal`
+- `duplicateTotal`
+- `suppressedTotal`
+- `sentTotal`
+- `retryScheduledTotal`
+- `failedTotal`
+- `deadLetterTotal`
+- `sentLatencySamples`
+- `averageSentLatencyMs`
 
 ## Simular fallos de proveedor
 
